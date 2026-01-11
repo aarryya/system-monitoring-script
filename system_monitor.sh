@@ -1,41 +1,45 @@
 #!/bin/bash
 
-DISK_THRESHOLD=80
-MEM_THRESHOLD=75
-LOG_FILE="system_monitor.log"
-
 echo "----------------------------------------"
 echo "System Monitoring Report - $(date)"
 echo "----------------------------------------"
 
-# Disk Usage
-DISK_USAGE=$(df / | tail -1 | awk '{print $5}' | sed 's/%//')
+# ---- CPU Usage ----
+cpu=$(powershell -Command "(Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average" | tr -d '\r')
+echo "CPU Usage: ${cpu:-N/A}%"
 
-if [ "$DISK_USAGE" -ge "$DISK_THRESHOLD" ]; then
-    ALERT="ALERT: Disk usage is high! Usage: ${DISK_USAGE}%"
-    echo "$ALERT"
-    echo "$(date) - $ALERT" >> $LOG_FILE
+# ---- Memory Usage ----
+mem_info=$(powershell -Command "(Get-CimInstance Win32_OperatingSystem | ForEach-Object {[math]::Round($_.TotalVisibleMemorySize/1MB) + ' ' + [math]::Round($_.FreePhysicalMemory/1MB)})" | tr -d '\r')
+
+total_mem=$(echo "$mem_info" | awk '{print $1}')
+free_mem=$(echo "$mem_info" | awk '{print $2}')
+
+if [[ -n "$total_mem" && -n "$free_mem" ]]; then
+    used_mem=$((total_mem - free_mem))
+    mem_percent=$(( used_mem * 100 / total_mem ))
+    echo "Memory Usage: ${mem_percent}% (${used_mem} MB used of ${total_mem} MB)"
 else
-    echo "Disk usage is normal: ${DISK_USAGE}%"
+    echo "Memory info not available"
 fi
 
-# Memory Usage
-TOTAL_MEM=$(free | awk '/Mem:/ {print $2}')
-USED_MEM=$(free | awk '/Mem:/ {print $3}')
-MEM_USAGE=$((USED_MEM * 100 / TOTAL_MEM))
+# ---- Disk Usage (C:) ----
+disk_info=$(powershell -Command "(Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='C:'\" | ForEach-Object {[math]::Round($_.Size/1GB) + ' ' + [math]::Round($_.FreeSpace/1GB)})" | tr -d '\r')
 
-if [ "$MEM_USAGE" -ge "$MEM_THRESHOLD" ]; then
-    ALERT="ALERT: Memory usage is high! Usage: ${MEM_USAGE}%"
-    echo "$ALERT"
-    echo "$(date) - $ALERT" >> $LOG_FILE
+size_gb=$(echo "$disk_info" | awk '{print $1}')
+free_gb=$(echo "$disk_info" | awk '{print $2}')
+
+if [[ -n "$size_gb" && -n "$free_gb" ]]; then
+    used_gb=$((size_gb - free_gb))
+    disk_percent=$(( used_gb * 100 / size_gb ))
+    echo "Disk Usage (C:): ${disk_percent}% (${used_gb} GB used of ${size_gb} GB)"
 else
-    echo "Memory usage is normal: ${MEM_USAGE}%"
+    echo "Disk info not available"
 fi
 
+# ---- Top 5 processes by memory ----
 echo ""
-echo "Top 5 CPU-consuming processes:"
-ps -eo pid,cmd,%cpu,%mem --sort=-%cpu | head -n 6
+echo "Top 5 processes by memory:"
+powershell -Command "Get-Process | Sort-Object -Descending WS | Select-Object -First 5 Name,Id,WS | Format-Table -AutoSize" | tr -d '\r'
 
 echo ""
-echo "Top 5 Memory-consuming processes:"
-ps -eo pid,cmd,%cpu,%mem --sort=-%mem | head -n 6
+echo "----------------------------------------"
